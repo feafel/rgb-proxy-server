@@ -219,6 +219,26 @@ describe("POST /json-rpc", () => {
     expect(res.body.id).toStrictEqual(reqID);
     expect(res.body.result.protocol_version).toStrictEqual("0.2");
   });
+
+  it("oversized uploads are rejected with 413 instead of filling disk/RAM", async () => {
+    // Default limit is 64 MB: one byte over must fail closed with a JSON-RPC
+    // error, not an HTML 500, and must not create a consignment record.
+    const big = Buffer.alloc(64 * 1024 * 1024 + 1, 1);
+    const reqID = "big-1";
+    const res = await request(app)
+      .post("/json-rpc")
+      .set("Content-type", contentTypeForm)
+      .field("jsonrpc", jsonrpcVersion)
+      .field("id", reqID)
+      .field("method", "consignment.post")
+      .field("params[recipient_id]", "oversized.post")
+      .field("params[txid]", "aTxid")
+      .attach("file", big, "big.bin")
+      .expect(413);
+    expect(res.body.jsonrpc).toStrictEqual(jsonrpcVersion);
+    expect(res.body.id).toStrictEqual(reqID);
+    expect(res.body.error.code).toStrictEqual(-305);
+  });
 });
 
 describe("consignment validation", () => {

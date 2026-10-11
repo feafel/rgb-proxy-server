@@ -66,6 +66,12 @@ export class MissingFile extends JSONRPCErrorException {
   }
 }
 
+export class FileTooLarge extends JSONRPCErrorException {
+  constructor(data?: object) {
+    super("File too large", -305, data);
+  }
+}
+
 export class MissingTxid extends JSONRPCErrorException {
   constructor(data?: object) {
     super("Missing TXID", -303, data);

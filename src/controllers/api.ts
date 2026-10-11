@@ -16,6 +16,7 @@ import path from "path";
 import {
   CannotChangeAck,
   CannotChangeUploadedFile,
+  FileTooLarge,
   InvalidAck,
   InvalidAttachmentID,
   InvalidRecipientID,
@@ -38,13 +39,31 @@ const PROTOCOL_VERSION = "0.2";
 
 const DATABASE_FILE = "app.db";
 
+// Bound multipart uploads: without a limit, consignment.post / media.post
+// accept arbitrarily large files — multer spills them to disk and
+// genHashFromFile then readFileSync()s the whole file, so one request can
+// fill the disk and OOM the process. 64 MB is generous for collectible
+// media while keeping a single request survivable; override with
+// MAX_UPLOAD_MB.
+const DEFAULT_MAX_UPLOAD_MB = 64;
+
+function resolveMaxUploadBytes(): number {
+  const parsed = Number(process.env.MAX_UPLOAD_MB);
+  const mb =
+    Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_UPLOAD_MB;
+  return Math.floor(mb * 1024 * 1024);
+}
+
 const storage = multer.diskStorage({
   destination: function (_req, _file, cb) {
     cb(null, tempDir);
   },
 });
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: resolveMaxUploadBytes() },
+});
 
 let appDir: string;
 let db: Database;
@@ -602,6 +621,34 @@ export const loadApiEndpoints = (app: Application): void => {
             }
           }
         });
+    }
+  );
+
+  // Multer errors (e.g. LIMIT_FILE_SIZE) fire before the JSON-RPC handler
+  // runs, so without this Express' default HTML 500 would leak instead of a
+  // JSON-RPC error.
+  app.use(
+    "/json-rpc",
+    (
+      err: unknown,
+      req: Request,
+      res: Response,
+      next: (e?: unknown) => void
+    ) => {
+      if (
+        err &&
+        typeof err === "object" &&
+        (err as { code?: unknown }).code === "LIMIT_FILE_SIZE"
+      ) {
+        const body = req?.body as { id?: unknown } | undefined;
+        res.status(413).json({
+          jsonrpc: "2.0",
+          id: body?.id ?? null,
+          error: new FileTooLarge().toObject(),
+        });
+        return;
+      }
+      next(err);
     }
   );
 };
